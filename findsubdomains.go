@@ -1,117 +1,93 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 )
 
-var apiToken = os.Getenv("SPYSE_API_TOKEN")
-
-func callSubdomainsAggregateEndpoint(domain string) []string {
-	out := make([]string, 0)
-
-	fetchURL := fmt.Sprintf(
-		"https://api.spyse.com/v1/subdomains-aggregate?api_token=%s&domain=%s",
-		apiToken, domain,
-	)
-
-	type Cidr struct {
-		Results []struct {
-			Data struct {
-				Domains []string `json:"domains"`
-			} `json:"data"`
-		} `json:"results"`
-	}
-
-	type Cidrs struct {
-		Cidr16, Cidr24 Cidr
-	}
-
-	wrapper := struct {
-		Cidrs Cidrs `json:"cidr"`
-	}{}
-
-	err := fetchJSON(fetchURL, &wrapper)
-
+// fetchJSONWithHeader performs an HTTP GET request with a custom header and decodes the JSON response.
+func fetchJSONWithHeader(url string, headerName string, headerValue string, wrapper interface{}) error {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		// Fail silently
-		return []string{}
+		return err
+	}
+	req.Header.Set(headerName, headerValue)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	for _, result := range wrapper.Cidrs.Cidr16.Results {
-		for _, domain := range result.Data.Domains {
-			out = append(out, domain)
-		}
-	}
-	for _, result := range wrapper.Cidrs.Cidr24.Results {
-		for _, domain := range result.Data.Domains {
-			out = append(out, domain)
-		}
-	}
-
-	return out
+	dec := json.NewDecoder(resp.Body)
+	return dec.Decode(wrapper)
 }
 
-/**
-
- */
-func callSubdomainsEndpoint(domain string) []string {
+func fetchSpyseV4Subdomains(domain string, apiKey string) ([]string, error) {
 	out := make([]string, 0)
+	// According to Spyse API v4 docs, limit can be up to 1000.
+	// Free tier might have lower limits or only return the first page.
+	// For simplicity, we'll fetch one page with a reasonable limit.
+	// Pagination would require handling the 'offset' and 'total_count'.
+	limit := 100 
+	fetchURL := fmt.Sprintf(
+		"https://api.spyse.com/v4/data/domain/subdomain?domain_name=%s&limit=%d",
+		domain, limit,
+	)
 
-	// Start querying the Spyse API from page 1
-	page := 1
-
-	for {
-		wrapper := struct {
-			Records []struct {
-				Domain string `json:"domain"`
-			} `json:"records"`
-		}{}
-
-		fetchURL := fmt.Sprintf(
-			"https://api.spyse.com/v1/subdomains?api_token=%s&domain=%s&page=%d",
-			apiToken, domain, page,
-		)
-
-		err := fetchJSON(fetchURL, &wrapper)
-		if err != nil {
-			// Fail silently, by returning what we got so far
-			return out
-		}
-
-		// The API does not respond with any paging, nor does it give us any idea of
-		// the total amount of domains, so we just have to keep asking for a new page until
-		// the returned `records` array is empty
-		// NOTE: The free tier always gives you the first page for free, and you get "25 unlimited search requests"
-		if len(wrapper.Records) == 0 {
-			break
-		}
-
-		for _, record := range wrapper.Records {
-			out = append(out, record.Domain)
-		}
-
-		page++
+	type SpyseSubdomainItem struct {
+		Domain string `json:"domain"`
+	}
+	type SpyseData struct {
+		Items      []SpyseSubdomainItem `json:"items"`
+		TotalCount int                  `json:"total_count"`
+		Offset     int                  `json:"offset"`
+		SearchID   string               `json:"search_id"`
+	}
+	type SpyseResponse struct {
+		Data   SpyseData `json:"data"`
+		Status string    `json:"status"`
 	}
 
-	return out
+	var wrapper SpyseResponse
+	err := fetchJSONWithHeader(fetchURL, "X-API-KEY", apiKey, &wrapper)
+	if err != nil {
+		return nil, fmt.Errorf("Spyse API V4 request failed: %w", err)
+	}
+
+	if wrapper.Status != "ok" && wrapper.Status != "" { // API might return empty status on success
+		return nil, fmt.Errorf("Spyse API V4 returned status: %s", wrapper.Status)
+	}
+	
+	for _, item := range wrapper.Data.Items {
+		out = append(out, item.Domain)
+	}
+
+	return out, nil
 }
 
 func fetchFindSubDomains(domain string) ([]string, error) {
-
-	out := make([]string, 0)
-
-	apiToken := os.Getenv("SPYSE_API_TOKEN")
-	if apiToken == "" {
+	apiKey := os.Getenv("SPYSE_API_TOKEN")
+	if apiKey == "" {
 		// Must have an API token
 		return []string{}, nil
 	}
 
-	// The Subdomains-Aggregate endpoint returns some, but not all available domains
-	out = append(out, callSubdomainsAggregateEndpoint(domain)...)
+	subdomains, err := fetchSpyseV4Subdomains(domain, apiKey)
+	if err != nil {
+		// Fail silently for now, or return the error if preferred
+		// fmt.Fprintf(os.Stderr, "Error fetching from Spyse V4: %v\n", err)
+		return []string{}, nil // Keep previous behavior of failing silently on error
+	}
 
-	// The Subdomains endpoint only guarantees the first 30 domains, the rest needs credit at Spyze
-	out = append(out, callSubdomainsEndpoint(domain)...)
-
-	return out, nil
+	return subdomains, nil
 }
