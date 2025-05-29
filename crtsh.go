@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 )
 
@@ -24,7 +24,7 @@ func fetchCrtSh(domain string) ([]string, error) {
 
 	output := make([]string, 0)
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 
 	if err := json.Unmarshal(body, &results); err != nil {
 		return []string{}, err
