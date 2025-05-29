@@ -8,17 +8,24 @@ Find domains and subdomains potentially related to a given domain.
 If you have Go installed and configured (i.e. with `$GOPATH/bin` in your `$PATH`):
 
 ```
-go get -u github.com/tomnomnom/assetfinder
+go install github.com/0x1Jar/assetfinder@latest
 ```
 
-Otherwise [download a release for your platform](https://github.com/tomnomnom/assetfinder/releases).
+Alternatively, you can [download a pre-compiled release for your platform](https://github.com/0x1Jar/assetfinder/releases).
 To make it easier to execute you can put the binary in your `$PATH`.
 
 ## Usage
 
 ```
-assetfinder [--subs-only] <domain>
+assetfinder [--subs-only] [--sources <source1,source2...>] <domain>
 ```
+
+If `<domain>` is not provided, assetfinder will read domains from stdin (one domain per line).
+
+**Flags:**
+* `--subs-only`: Only include subdomains of the search domain.
+* `--sources <source1,...,sourceN>`: Specify a comma-separated list of sources to use. If not provided, all available sources are used.
+  Available sources: `crtsh`, `certspotter`, `hackertarget`, `threatcrowd`, `wayback`, `dns.bufferover.run`, `facebook`, `virustotal`, `findsubdomains`, `urlscan`.
 
 ## Sources
 
@@ -47,6 +54,4 @@ Please feel free to issue pull requests with new sources! :)
 * https://certdb.com/api-documentation
 
 ## TODO
-* Flags to control which sources are used
-    * Likely to be all on by default and a flag to disable
-* Read domains from stdin
+* Implement more sources (see "Sources to be implemented" below).
