@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
@@ -16,7 +15,9 @@ import (
 
 func main() {
 	var subsOnly bool
+	var sourcesList string
 	flag.BoolVar(&subsOnly, "subs-only", false, "Only include subdomains of search domain")
+	flag.StringVar(&sourcesList, "sources", "all", "Comma-separated list of sources to use (e.g., certspotter,crtsh)")
 	flag.Parse()
 
 	var domains io.Reader
@@ -27,17 +28,39 @@ func main() {
 		domains = strings.NewReader(domain)
 	}
 
-	sources := []fetchFn{
-		fetchCertSpotter,
-		fetchHackerTarget,
-		fetchThreatCrowd,
-		fetchCrtSh,
-		fetchFacebook,
-		//fetchWayback, // A little too slow :(
-		fetchVirusTotal,
-		fetchFindSubDomains,
-		fetchUrlscan,
-		fetchBufferOverrun,
+	allSources := map[string]fetchFn{
+		"certspotter":     fetchCertSpotter,
+		"hackertarget":    fetchHackerTarget,
+		"threatcrowd":     fetchThreatCrowd,
+		"crtsh":           fetchCrtSh,
+		"facebook":        fetchFacebook,
+		"wayback":         fetchWayback,
+		"virustotal":      fetchVirusTotal,
+		"findsubdomains":  fetchFindSubDomains,
+		"urlscan":         fetchUrlscan,
+		"bufferoverrun":   fetchBufferOverrun,
+	}
+
+	selectedSources := []fetchFn{}
+	if sourcesList == "all" {
+		for _, fn := range allSources {
+			selectedSources = append(selectedSources, fn)
+		}
+	} else {
+		sourceNames := strings.Split(sourcesList, ",")
+		for _, name := range sourceNames {
+			name = strings.TrimSpace(name)
+			if fn, ok := allSources[name]; ok {
+				selectedSources = append(selectedSources, fn)
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: Unknown source '%s' specified.\n", name)
+			}
+		}
+	}
+
+	if len(selectedSources) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: No valid sources selected. Exiting.")
+		os.Exit(1)
 	}
 
 	out := make(chan string)
@@ -50,7 +73,7 @@ func main() {
 		domain := strings.ToLower(sc.Text())
 
 		// call each of the source workers in a goroutine
-		for _, source := range sources {
+		for _, source := range selectedSources {
 			wg.Add(1)
 			fn := source
 
@@ -103,7 +126,7 @@ func httpGet(url string) ([]byte, error) {
 		return []byte{}, err
 	}
 
-	raw, err := ioutil.ReadAll(res.Body)
+	raw, err := io.ReadAll(res.Body)
 
 	res.Body.Close()
 	if err != nil {
