@@ -84,9 +84,8 @@ func fetchFindSubDomains(domain string) ([]string, error) {
 
 	subdomains, err := fetchSpyseV4Subdomains(domain, apiKey)
 	if err != nil {
-		// Fail silently for now, or return the error if preferred
-		// fmt.Fprintf(os.Stderr, "Error fetching from Spyse V4: %v\n", err)
-		return []string{}, nil // Keep previous behavior of failing silently on error
+		fmt.Fprintf(os.Stderr, "Error fetching subdomains from Spyse V4 for domain %s: %v\n", domain, err)
+		return []string{}, nil // Return empty list on error to allow other sources to proceed
 	}
 
 	return subdomains, nil
