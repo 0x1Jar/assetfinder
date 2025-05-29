@@ -1,5 +1,7 @@
 #!/bin/bash
-PROJDIR=$(cd `dirname $0`/.. && pwd)
+set -euo pipefail
+
+PROJDIR=$(cd "$(dirname "$0")/.." && pwd)
 
 VERSION="${1}"
 TAG="v${VERSION}"
@@ -7,37 +9,65 @@ USER="0x1Jar"
 REPO="assetfinder"
 BINARY="${REPO}"
 
+# Check for github-release command
+if ! command -v github-release &> /dev/null; then
+    echo "Error: github-release command not found. Please install it."
+    echo "See: https://github.com/github-release/github-release"
+    exit 1
+fi
+
 if [[ -z "${VERSION}" ]]; then
     echo "Usage: ${0} <version>"
     exit 1
 fi
 
 if [[ -z "${GITHUB_TOKEN}" ]]; then
-    echo "You forgot to set your GITHUB_TOKEN"
+    echo "Error: GITHUB_TOKEN environment variable is not set."
     exit 2
 fi
 
-cd ${PROJDIR}
+cd "${PROJDIR}"
 
-# Run the tests
-go test
-if [ $? -ne 0 ]; then
-    echo "Tests failed. Aborting."
+echo "Running tests..."
+if ! go test ./...; then
+    echo "Error: Tests failed. Aborting release."
     exit 3
 fi
+echo "Tests passed."
 
-# Check if tag exists
+echo "Fetching tags from remote..."
 git fetch --tags
-git tag | grep "^${TAG}$"
 
-if [ $? -ne 0 ]; then
+echo "Checking if tag ${TAG} already exists..."
+if git show-ref --tags --quiet --verify -- "refs/tags/${TAG}"; then
+    echo "Tag ${TAG} already exists. Checking if release exists on GitHub..."
+    # Attempt to get release info. If it exists, github-release info will return 0.
+    if github-release info --user "${USER}" --repo "${REPO}" --tag "${TAG}" > /dev/null 2>&1; then
+        echo "Release for tag ${TAG} already exists on GitHub. Skipping release creation."
+    else
+        echo "Tag ${TAG} exists locally or remotely, but release not found on GitHub. Creating pre-release..."
+        github-release release \
+            --user "${USER}" \
+            --repo "${REPO}" \
+            --tag "${TAG}" \
+            --name "${REPO} ${TAG}" \
+            --description "Release for version ${VERSION}" \
+            --pre-release
+        echo "Pre-release for ${TAG} created."
+    fi
+else
+    echo "Tag ${TAG} does not exist. Creating tag and pre-release..."
+    # Create the tag locally first. It's good practice to tag before pushing or releasing.
+    # However, github-release tool creates the tag on GitHub if it doesn't exist.
+    # For simplicity with this tool, we'll let github-release handle tag creation on the remote.
     github-release release \
-        --user ${USER} \
-        --repo ${REPO} \
-        --tag ${TAG} \
+        --user "${USER}" \
+        --repo "${REPO}" \
+        --tag "${TAG}" \
         --name "${REPO} ${TAG}" \
-        --description "${TAG}" \
+        --description "Release for version ${VERSION}" \
         --pre-release
+    echo "Tag ${TAG} and pre-release created."
 fi
 
 
@@ -50,24 +80,50 @@ for ARCH in "amd64" "386"; do
             BINFILE="${BINFILE}.exe"
         fi
 
-        rm -f ${BINFILE}
+        rm -f "${BINFILE}" "${ARCHIVE}" # Clean up previous artifacts
 
-        GOOS=${OS} GOARCH=${ARCH} go build -ldflags "-X main.gronVersion=${VERSION}" github.com/${USER}/${REPO}
+        echo "Building for ${OS}/${ARCH}..."
+        # Assuming the version variable in your Go code is main.version
+        # If it's main.gronVersion, change it back below.
+        if ! GOOS=${OS} GOARCH=${ARCH} go build -ldflags "-X main.version=${VERSION}" -o "${BINFILE}" "github.com/${USER}/${REPO}"; then
+            echo "Error: Build failed for ${OS}/${ARCH}. Skipping."
+            continue # Skip to the next iteration
+        fi
 
+        echo "Creating archive for ${OS}/${ARCH}..."
         if [[ "${OS}" == "windows" ]]; then
             ARCHIVE="${BINARY}-${OS}-${ARCH}-${VERSION}.zip"
-            zip ${ARCHIVE} ${BINFILE}
+            if ! zip "${ARCHIVE}" "${BINFILE}"; then
+                echo "Error: Failed to create zip archive ${ARCHIVE}. Skipping upload."
+                rm -f "${BINFILE}" # Clean up binary
+                continue
+            fi
         else
             ARCHIVE="${BINARY}-${OS}-${ARCH}-${VERSION}.tgz"
-            tar --create --gzip --file=${ARCHIVE} ${BINFILE}
+            if ! tar -czf "${ARCHIVE}" "${BINFILE}"; then
+                echo "Error: Failed to create tar.gz archive ${ARCHIVE}. Skipping upload."
+                rm -f "${BINFILE}" # Clean up binary
+                continue
+            fi
         fi
 
         echo "Uploading ${ARCHIVE}..."
-        github-release upload \
-            --user ${USER} \
-            --repo ${REPO} \
-            --tag ${TAG} \
+        if ! github-release upload \
+            --user "${USER}" \
+            --repo "${REPO}" \
+            --tag "${TAG}" \
             --name "${ARCHIVE}" \
-            --file ${PROJDIR}/${ARCHIVE}
+            --file "${PROJDIR}/${ARCHIVE}"; then
+            echo "Error: Failed to upload ${ARCHIVE}. Please check manually."
+            # Decide if you want to exit or continue with other builds
+            # For now, it continues
+        else
+            echo "${ARCHIVE} uploaded successfully."
+        fi
+        
+        # Clean up binary and archive after successful upload or if keeping them is not needed
+        rm -f "${BINFILE}" "${ARCHIVE}"
     done
 done
+
+echo "Release process for ${TAG} completed."
